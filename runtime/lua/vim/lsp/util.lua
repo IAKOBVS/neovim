@@ -1,5 +1,4 @@
 local protocol = require('vim.lsp.protocol')
-local snippet = require('vim.lsp._snippet_grammar')
 local validate = vim.validate
 local api = vim.api
 local list_extend = vim.list_extend
@@ -174,11 +173,11 @@ local _str_byteindex_enc = M._str_byteindex_enc
 --- CAUTION: Changes in-place!
 ---
 ---@deprecated
----@param lines (table) Original list of strings
----@param A (table) Start position; a 2-tuple of {line,col} numbers
----@param B (table) End position; a 2-tuple of {line,col} numbers
----@param new_lines (table) list of strings to replace the original
----@return table The modified {lines} object
+---@param lines string[] Original list of strings
+---@param A [integer, integer] Start position; a 2-tuple of {line,col} numbers
+---@param B [integer, integer] End position; a 2-tuple {line,col} numbers
+---@param new_lines string[] list of strings to replace the original
+---@return string[] The modified {lines} object
 function M.set_lines(lines, A, B, new_lines)
   vim.deprecate('vim.lsp.util.set_lines()', 'nil', '0.12')
   -- 0-indexing to 1-indexing
@@ -343,70 +342,8 @@ local function get_line_byte_from_position(bufnr, position, offset_encoding)
   return col
 end
 
---- Process and return progress reports from lsp server
----@private
----@deprecated Use vim.lsp.status() or access client.progress directly
-function M.get_progress_messages()
-  vim.deprecate('vim.lsp.util.get_progress_messages()', 'vim.lsp.status()', '0.11')
-  local new_messages = {}
-  local progress_remove = {}
-
-  for _, client in ipairs(vim.lsp.get_clients()) do
-    local groups = {}
-    for progress in client.progress do
-      local value = progress.value
-      if type(value) == 'table' and value.kind then
-        local group = groups[progress.token]
-        if not group then
-          group = {
-            done = false,
-            progress = true,
-            title = 'empty title',
-          }
-          groups[progress.token] = group
-        end
-        group.title = value.title or group.title
-        group.cancellable = value.cancellable or group.cancellable
-        if value.kind == 'end' then
-          group.done = true
-        end
-        group.message = value.message or group.message
-        group.percentage = value.percentage or group.percentage
-      end
-    end
-
-    for _, group in pairs(groups) do
-      table.insert(new_messages, group)
-    end
-
-    local messages = client.messages
-    local data = messages
-    for token, ctx in pairs(data.progress) do
-      local new_report = {
-        name = data.name,
-        title = ctx.title or 'empty title',
-        message = ctx.message,
-        percentage = ctx.percentage,
-        done = ctx.done,
-        progress = true,
-      }
-      table.insert(new_messages, new_report)
-
-      if ctx.done then
-        table.insert(progress_remove, { client = client, token = token })
-      end
-    end
-  end
-
-  for _, item in ipairs(progress_remove) do
-    item.client.messages.progress[item.token] = nil
-  end
-
-  return new_messages
-end
-
 --- Applies a list of text edits to a buffer.
----@param text_edits table list of `TextEdit` objects
+---@param text_edits lsp.TextEdit[]
 ---@param bufnr integer Buffer id
 ---@param offset_encoding string utf-8|utf-16|utf-32
 ---@see https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textEdit
@@ -541,43 +478,11 @@ function M.apply_text_edits(text_edits, bufnr, offset_encoding)
   end
 end
 
--- local valid_windows_path_characters = "[^<>:\"/\\|?*]"
--- local valid_unix_path_characters = "[^/]"
--- https://github.com/davidm/lua-glob-pattern
--- https://stackoverflow.com/questions/1976007/what-characters-are-forbidden-in-windows-and-linux-directory-names
--- function M.glob_to_regex(glob)
--- end
-
---- Can be used to extract the completion items from a
---- `textDocument/completion` request, which may return one of
---- `CompletionItem[]`, `CompletionList` or null.
----
---- Note that this method doesn't apply `itemDefaults` to `CompletionList`s, and hence the returned
---- results might be incorrect.
----
----@deprecated
----@param result table The result of a `textDocument/completion` request
----@return lsp.CompletionItem[] List of completion items
----@see https://microsoft.github.io/language-server-protocol/specification#textDocument_completion
-function M.extract_completion_items(result)
-  vim.deprecate('vim.lsp.util.extract_completion_items()', nil, '0.11')
-  if type(result) == 'table' and result.items then
-    -- result is a `CompletionList`
-    return result.items
-  elseif result ~= nil then
-    -- result is `CompletionItem[]`
-    return result
-  else
-    -- result is `null`
-    return {}
-  end
-end
-
 --- Applies a `TextDocumentEdit`, which is a list of changes to a single
 --- document.
 ---
----@param text_document_edit table: a `TextDocumentEdit` object
----@param index integer: Optional index of the edit, if from a list of edits (or nil, if not from a list)
+---@param text_document_edit lsp.TextDocumentEdit
+---@param index? integer: Optional index of the edit, if from a list of edits (or nil, if not from a list)
 ---@param offset_encoding? string
 ---@see https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocumentEdit
 function M.apply_text_document_edit(text_document_edit, index, offset_encoding)
@@ -604,8 +509,7 @@ function M.apply_text_document_edit(text_document_edit, index, offset_encoding)
     and (
       text_document.version
       and text_document.version > 0
-      and M.buf_versions[bufnr]
-      and M.buf_versions[bufnr] > text_document.version
+      and vim.b[bufnr].changedtick > text_document.version
     )
   then
     print('Buffer ', text_document.uri, ' newer than edits.')
@@ -613,38 +517,6 @@ function M.apply_text_document_edit(text_document_edit, index, offset_encoding)
   end
 
   M.apply_text_edits(text_document_edit.edits, bufnr, offset_encoding)
-end
-
---- Parses snippets in a completion entry.
----
----@deprecated
----@param input string unparsed snippet
----@return string parsed snippet
-function M.parse_snippet(input)
-  vim.deprecate('vim.lsp.util.parse_snippet()', nil, '0.11')
-  local ok, parsed = pcall(function()
-    return snippet.parse(input)
-  end)
-  if not ok then
-    return input
-  end
-
-  return tostring(parsed)
-end
-
---- Turns the result of a `textDocument/completion` request into vim-compatible
---- |complete-items|.
----
----@deprecated
----@param result table The result of a `textDocument/completion` call, e.g.
---- from |vim.lsp.buf.completion()|, which may be one of `CompletionItem[]`,
---- `CompletionList` or `null`
----@param prefix (string) the prefix to filter the completion items
----@return table[] items
----@see complete-items
-function M.text_document_completion_list_to_complete_items(result, prefix)
-  vim.deprecate('vim.lsp.util.text_document_completion_list_to_complete_items()', nil, '0.11')
-  return vim.lsp._completion._lsp_to_complete_items(result, prefix)
 end
 
 local function path_components(path)
@@ -661,6 +533,7 @@ local function path_under_prefix(path, prefix)
 end
 
 --- Get list of buffers whose filename matches the given path prefix (normalized full path)
+---@param prefix string
 ---@return integer[]
 local function get_bufs_with_prefix(prefix)
   prefix = path_components(prefix)
@@ -743,7 +616,7 @@ function M.rename(old_fname, new_fname, opts)
     buf_rename[b] = { from = old_bname, to = new_bname }
   end
 
-  local newdir = assert(vim.fs.dirname(new_fname))
+  local newdir = vim.fs.dirname(new_fname)
   vim.fn.mkdir(newdir, 'p')
 
   local ok, err = os.rename(old_fname_full, new_fname)
@@ -752,7 +625,7 @@ function M.rename(old_fname, new_fname, opts)
   local old_undofile = vim.fn.undofile(old_fname_full)
   if uv.fs_stat(old_undofile) ~= nil then
     local new_undofile = vim.fn.undofile(new_fname)
-    vim.fn.mkdir(assert(vim.fs.dirname(new_undofile)), 'p')
+    vim.fn.mkdir(vim.fs.dirname(new_undofile), 'p')
     os.rename(old_undofile, new_undofile)
   end
 
@@ -805,7 +678,7 @@ end
 
 --- Applies a `WorkspaceEdit`.
 ---
----@param workspace_edit table `WorkspaceEdit`
+---@param workspace_edit lsp.WorkspaceEdit
 ---@param offset_encoding string utf-8|utf-16|utf-32 (required)
 ---@see https://microsoft.github.io/language-server-protocol/specifications/specification-current/#workspace_applyEdit
 function M.apply_workspace_edit(workspace_edit, offset_encoding)
@@ -851,8 +724,8 @@ end
 --- Note that if the input is of type `MarkupContent` and its kind is `plaintext`,
 --- then the corresponding value is returned without further modifications.
 ---
----@param input (lsp.MarkedString | lsp.MarkedString[] | lsp.MarkupContent)
----@param contents (table|nil) List of strings to extend with converted lines. Defaults to {}.
+---@param input lsp.MarkedString|lsp.MarkedString[]|lsp.MarkupContent
+---@param contents string[]|nil List of strings to extend with converted lines. Defaults to {}.
 ---@return string[] extended with lines of converted markdown.
 ---@see https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_hover
 function M.convert_input_to_markdown_lines(input, contents)
@@ -887,11 +760,11 @@ end
 
 --- Converts `textDocument/signatureHelp` response to markdown lines.
 ---
----@param signature_help table Response of `textDocument/SignatureHelp`
+---@param signature_help lsp.SignatureHelp Response of `textDocument/SignatureHelp`
 ---@param ft string|nil filetype that will be use as the `lang` for the label markdown code block
 ---@param triggers table|nil list of trigger characters from the lsp server. used to better determine parameter offsets
----@return table|nil table list of lines of converted markdown.
----@return table|nil table of active hl
+---@return string[]|nil table list of lines of converted markdown.
+---@return number[]|nil table of active hl
 ---@see https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_signatureHelp
 function M.convert_signature_help_to_markdown_lines(signature_help, ft, triggers)
   if not signature_help.signatures then
@@ -1088,7 +961,7 @@ end
 
 --- Shows document and optionally jumps to the location.
 ---
----@param location table (`Location`|`LocationLink`)
+---@param location lsp.Location|lsp.LocationLink
 ---@param offset_encoding string|nil utf-8|utf-16|utf-32
 ---@param opts table|nil options
 ---        - reuse_win (boolean) Jump to existing window if buffer is already open.
@@ -1145,7 +1018,7 @@ end
 
 --- Jumps to a location.
 ---
----@param location table (`Location`|`LocationLink`)
+---@param location lsp.Location|lsp.LocationLink
 ---@param offset_encoding string|nil utf-8|utf-16|utf-32
 ---@param reuse_win boolean|nil Jump to existing window if buffer is already open.
 ---@return boolean `true` if the jump succeeded
@@ -1166,7 +1039,7 @@ end
 ---   - for Location, range is shown (e.g., function definition)
 ---   - for LocationLink, targetRange is shown (e.g., body of function definition)
 ---
----@param location table a single `Location` or `LocationLink`
+---@param location lsp.Location|lsp.LocationLink
 ---@param opts table
 ---@return integer|nil buffer id of float window
 ---@return integer|nil window id of float window
@@ -1282,7 +1155,7 @@ end
 --- If you want to open a popup with fancy markdown, use `open_floating_preview` instead
 ---
 ---@param bufnr integer
----@param contents table of lines to show in window
+---@param contents string[] of lines to show in window
 ---@param opts table with optional fields
 ---  - height    of floating window
 ---  - width     of floating window
@@ -1797,7 +1670,7 @@ do --[[ References ]]
   --- Shows a list of document highlights for a certain buffer.
   ---
   ---@param bufnr integer Buffer id
-  ---@param references table List of `DocumentHighlight` objects to highlight
+  ---@param references lsp.DocumentHighlight[] objects to highlight
   ---@param offset_encoding string One of "utf-8", "utf-16", "utf-32".
   ---@see https://microsoft.github.io/language-server-protocol/specification/#textDocumentContentChangeEvent
   function M.buf_highlight_references(bufnr, references, offset_encoding)
@@ -2001,7 +1874,7 @@ end
 --- CAUTION: Modifies the input in-place!
 ---
 ---@deprecated
----@param lines table list of lines
+---@param lines string[] list of lines
 ---@return string filetype or "markdown" if it was unchanged.
 function M.try_trim_markdown_code_blocks(lines)
   vim.deprecate('vim.lsp.util.try_trim_markdown_code_blocks()', 'nil', '0.12')
@@ -2026,7 +1899,7 @@ function M.try_trim_markdown_code_blocks(lines)
 end
 
 ---@param window integer|nil: window handle or 0 for current, defaults to current
----@param offset_encoding string utf-8|utf-16|utf-32|nil defaults to `offset_encoding` of first client of buffer of `window`
+---@param offset_encoding? string utf-8|utf-16|utf-32|nil defaults to `offset_encoding` of first client of buffer of `window`
 local function make_position_param(window, offset_encoding)
   window = window or 0
   local buf = api.nvim_win_get_buf(window)
@@ -2047,7 +1920,7 @@ end
 ---
 ---@param window integer|nil: window handle or 0 for current, defaults to current
 ---@param offset_encoding string|nil utf-8|utf-16|utf-32|nil defaults to `offset_encoding` of first client of buffer of `window`
----@return table `TextDocumentPositionParams` object
+---@return lsp.TextDocumentPositionParams
 ---@see https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocumentPositionParams
 function M.make_position_params(window, offset_encoding)
   window = window or 0
@@ -2060,7 +1933,7 @@ function M.make_position_params(window, offset_encoding)
 end
 
 --- Utility function for getting the encoding of the first LSP client on the given buffer.
----@param bufnr (integer) buffer handle or 0 for current, defaults to current
+---@param bufnr integer buffer handle or 0 for current, defaults to current
 ---@return string encoding first client if there is one, nil otherwise
 function M._get_offset_encoding(bufnr)
   validate({
@@ -2161,15 +2034,16 @@ end
 --- Creates a `TextDocumentIdentifier` object for the current buffer.
 ---
 ---@param bufnr integer|nil: Buffer handle, defaults to current
----@return table `TextDocumentIdentifier`
+---@return lsp.TextDocumentIdentifier
 ---@see https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocumentIdentifier
 function M.make_text_document_params(bufnr)
   return { uri = vim.uri_from_bufnr(bufnr or 0) }
 end
 
 --- Create the workspace params
----@param added table
----@param removed table
+---@param added lsp.WorkspaceFolder[]
+---@param removed lsp.WorkspaceFolder[]
+---@return lsp.WorkspaceFoldersChangeEvent
 function M.make_workspace_params(added, removed)
   return { event = { added = added, removed = removed } }
 end
@@ -2177,8 +2051,8 @@ end
 --- Returns indentation size.
 ---
 ---@see 'shiftwidth'
----@param bufnr (integer|nil): Buffer handle, defaults to current
----@return (integer) indentation size
+---@param bufnr integer|nil: Buffer handle, defaults to current
+---@return integer indentation size
 function M.get_effective_tabstop(bufnr)
   validate({ bufnr = { bufnr, 'n', true } })
   local bo = bufnr and vim.bo[bufnr] or vim.bo
@@ -2188,7 +2062,7 @@ end
 
 --- Creates a `DocumentFormattingParams` object for the current buffer and cursor position.
 ---
----@param options table|nil with valid `FormattingOptions` entries
+---@param options lsp.FormattingOptions|nil with valid `FormattingOptions` entries
 ---@return lsp.DocumentFormattingParams object
 ---@see https://microsoft.github.io/language-server-protocol/specifications/specification-current/#textDocument_formatting
 function M.make_formatting_params(options)
@@ -2327,9 +2201,16 @@ function M._refresh(method, opts)
   end
 end
 
-M._get_line_byte_from_position = get_line_byte_from_position
-
 ---@nodoc
-M.buf_versions = {} ---@type table<integer,integer>
+---@deprecated
+---@type table<integer,integer>
+M.buf_versions = setmetatable({}, {
+  __index = function(_, bufnr)
+    vim.deprecate('vim.lsp.util.buf_versions', 'vim.b.changedtick', '0.13')
+    return vim.b[bufnr].changedtick
+  end,
+})
+
+M._get_line_byte_from_position = get_line_byte_from_position
 
 return M

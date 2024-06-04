@@ -19,6 +19,7 @@
 #include "nvim/context.h"
 #include "nvim/decoration_provider.h"
 #include "nvim/drawline.h"
+#include "nvim/errors.h"
 #include "nvim/eval.h"
 #include "nvim/gettext_defs.h"
 #include "nvim/globals.h"
@@ -202,7 +203,7 @@ void *xmallocz(size_t size)
   }
 
   void *ret = xmalloc(total_size);
-  ((char *)ret)[size] = 0;
+  ((char *)ret)[size] = '\0';
 
   return ret;
 }
@@ -220,6 +221,20 @@ void *xmemdupz(const void *data, size_t len)
   FUNC_ATTR_NONNULL_ALL
 {
   return memcpy(xmallocz(len), data, len);
+}
+
+/// Copies `len` bytes of `src` to `dst` and zero terminates it.
+///
+/// @see {xstrlcpy}
+/// @param[out]  dst  Buffer to store the result.
+/// @param[in]  src  Buffer to be copied.
+/// @param[in]  len  Number of bytes to be copied.
+void *xmemcpyz(void *dst, const void *src, size_t len)
+  FUNC_ATTR_NONNULL_ALL FUNC_ATTR_NONNULL_RET
+{
+  memcpy(dst, src, len);
+  ((char *)dst)[len] = '\0';
+  return dst;
 }
 
 #ifndef HAVE_STRNLEN
@@ -842,7 +857,6 @@ void free_all_mem(void)
 
   decor_free_all_mem();
   drawline_free_all_mem();
-  input_free_all_mem();
 
   if (ui_client_channel_id) {
     ui_client_free_all_mem();
