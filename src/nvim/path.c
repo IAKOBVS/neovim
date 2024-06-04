@@ -471,20 +471,30 @@ char *concat_fnames_realloc(char *fname1, const char *fname2, bool sep)
 
 /// Adds a path separator to a filename, unless it already ends in one.
 ///
-/// @return `true` if the path separator was added or already existed.
-///         `false` if the filename is too long.
-bool add_pathsep(char *p)
+/// @return Ptr to the end of p if the path separator was added or already existed.
+///         NULL if the filename is too long.
+char *add_pathsep_len(char *p, size_t len)
   FUNC_ATTR_NONNULL_ALL
 {
-  const size_t len = strlen(p);
   if (*p != NUL && !after_pathsep(p, p + len)) {
     const size_t pathsep_len = sizeof(PATHSEPSTR);
     if (len > MAXPATHL - pathsep_len) {
-      return false;
+      return NULL;
     }
     memcpy(p + len, PATHSEPSTR, pathsep_len);
+    return p + len + pathsep_len;
   }
-  return true;
+  return p + len;
+}
+
+/// Adds a path separator to a filename, unless it already ends in one.
+///
+/// @return Ptr to the end of p if the path separator was added or already existed.
+///         NULL if the filename is too long.
+char *add_pathsep(char *p)
+  FUNC_ATTR_NONNULL_ALL
+{
+  return add_pathsep_len(p, strlen(p));
 }
 
 /// Get an allocated copy of the full path to a file.
